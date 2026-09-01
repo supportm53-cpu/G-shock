@@ -4,10 +4,11 @@
   "description": "Google Session Hijacker - Stealth Mode",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "postinstall": "npx puppeteer browsers install chrome"
   },
   "engines": {
-    "node": "20.x"
+    "node": "18.x"
   },
   "dependencies": {
     "express": "^4.18.2",

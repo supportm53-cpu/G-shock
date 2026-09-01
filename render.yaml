@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: google-hijacker
+    runtime: node
+    plan: starter
+    buildCommand: |
+      npm install
+      npx puppeteer browsers install chrome
+    startCommand: node server.js
+    envVars:
+      - key: NODE_VERSION
+        value: 18.0.0
+      - key: PUPPETEER_CACHE_DIR
+        value: /opt/render/.cache/puppeteer

